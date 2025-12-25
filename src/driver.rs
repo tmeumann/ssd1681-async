@@ -1,6 +1,6 @@
 use crate::commands::{
     REFRESH_PANEL, RESET, SET_DATA_ENTRY_MODE, SET_RAM_X, SET_RAM_Y, SET_TEMPERATURE_SENSOR,
-    SET_X_POINTER, SET_Y_POINTER, WRITE_RAM,
+    SET_UPDATE_SEQUENCE, SET_X_POINTER, SET_Y_POINTER, WRITE_RAM,
 };
 use crate::errors::DisplayError;
 use crate::utils::NeverPin;
@@ -123,6 +123,7 @@ impl<
         self.send_command(SET_Y_POINTER, Some(&[0x00, 0x00]))
             .await?;
         self.send_command(WRITE_RAM, Some(buffer)).await?;
+        self.set_update_sequence().await?;
         self.send_command(REFRESH_PANEL, None).await?;
 
         Ok(())
@@ -180,17 +181,17 @@ impl<
     }
 
     async fn send_spi(&mut self, data: &[u8]) -> Result<(), DisplayError> {
-        self.delay.delay_ms(10).await;
         self.spi.write(data).await.map_err(|_| DisplayError::Spi)
     }
 
     async fn send_command(&mut self, command: u8, data: Option<&[u8]>) -> Result<(), DisplayError> {
+        self.delay.delay_ms(10).await;
+        self.wait_if_busy().await?;
+
         self.dc_pin
             .set_low()
             .map_err(|_| DisplayError::DataCommand)?;
-        self.delay.delay_us(PIN_SETTLE_TIME_MICROS).await;
-
-        self.wait_if_busy().await?;
+        self.delay.delay_us(10).await;
 
         self.send_spi(&[command]).await?;
 
@@ -198,9 +199,10 @@ impl<
             self.dc_pin
                 .set_high()
                 .map_err(|_| DisplayError::DataCommand)?;
-            self.delay.delay_us(PIN_SETTLE_TIME_MICROS).await;
+            self.delay.delay_us(10).await;
             self.send_spi(buf).await?;
         }
+        self.delay.delay_ms(10).await;
 
         Ok(())
     }
@@ -232,5 +234,9 @@ impl<
     async fn set_internal_temp_sensor(&mut self) -> Result<(), DisplayError> {
         self.send_command(SET_TEMPERATURE_SENSOR, Some(&[0x80]))
             .await
+    }
+
+    async fn set_update_sequence(&mut self) -> Result<(), DisplayError> {
+        self.send_command(SET_UPDATE_SEQUENCE, Some(&[0xF7])).await
     }
 }
