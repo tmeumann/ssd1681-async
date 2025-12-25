@@ -1,12 +1,14 @@
 use crate::commands::{
-    REFRESH_PANEL, RESET, SET_DATA_ENTRY_MODE, SET_RAM_X, SET_RAM_Y, SET_X_POINTER, SET_Y_POINTER,
-    WRITE_RAM,
+    REFRESH_PANEL, RESET, SET_DATA_ENTRY_MODE, SET_RAM_X, SET_RAM_Y, SET_TEMPERATURE_SENSOR,
+    SET_X_POINTER, SET_Y_POINTER, WRITE_RAM,
 };
 use crate::errors::DisplayError;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::digital::Wait;
 use embedded_hal_async::spi::SpiDevice;
+
+const PIN_SETTLE_TIME_MICROS: u32 = 10;
 
 pub trait DisplayDriver {
     type Error;
@@ -16,7 +18,7 @@ pub trait DisplayDriver {
 
     async fn enable_backlight(&mut self) -> Result<(), Self::Error>;
     async fn disable_backlight(&mut self) -> Result<(), Self::Error>;
-    async fn draw_frame(&mut self, buffer: &[u8]) -> Result<usize, Self::Error>;
+    async fn draw_frame(&mut self, buffer: &[u8]) -> Result<(), Self::Error>;
 }
 
 pub struct Ssd1681Builder<const X: usize, const Y: usize, BL: OutputPin> {
@@ -107,16 +109,15 @@ impl<
         Ok(())
     }
 
-    async fn draw_frame(&mut self, buffer: &[u8]) -> Result<usize, DisplayError> {
+    async fn draw_frame(&mut self, buffer: &[u8]) -> Result<(), DisplayError> {
         self.send_command(SET_X_POINTER, Some(&[0x00])).await?;
         self.send_command(SET_Y_POINTER, Some(&[0x00, 0x00]))
             .await?;
-        let buf_size = (X * Y / 8);
-        self.send_command(WRITE_RAM, Some(&buffer[0..buf_size]))
+        self.send_command(WRITE_RAM, Some(&buffer[0..Self::BUF_LEN]))
             .await?;
         self.send_command(REFRESH_PANEL, None).await?;
 
-        Ok(buf_size)
+        Ok(())
     }
 }
 
@@ -154,15 +155,16 @@ impl<
     }
 
     async fn init(&mut self) -> Result<(), DisplayError> {
-        // self.delay.delay_ms(10).await;
+        self.delay.delay_ms(10).await; // ensure 10ms has passed since powerup
         self.reset().await?;
         self.set_data_entry_mode().await?;
         self.set_ram_x().await?;
         self.set_ram_y().await?;
+        self.set_internal_temp_sensor().await?;
         Ok(())
     }
 
-    async fn wait_for_idle(&mut self) -> Result<(), DisplayError> {
+    async fn wait_if_busy(&mut self) -> Result<(), DisplayError> {
         self.busy_pin
             .wait_for_low()
             .await
@@ -175,17 +177,20 @@ impl<
     }
 
     async fn send_command(&mut self, command: u8, data: Option<&[u8]>) -> Result<(), DisplayError> {
-        self.wait_for_idle().await?;
         self.dc_pin
             .set_low()
             .map_err(|_| DisplayError::DataCommand)?;
+        self.delay.delay_us(PIN_SETTLE_TIME_MICROS).await;
+
+        self.wait_if_busy().await?;
+
         self.send_spi(&[command]).await?;
 
         if let Some(buf) = data {
-            self.wait_for_idle().await?;
             self.dc_pin
                 .set_high()
                 .map_err(|_| DisplayError::DataCommand)?;
+            self.delay.delay_us(PIN_SETTLE_TIME_MICROS).await;
             self.send_spi(buf).await?;
         }
 
@@ -213,6 +218,11 @@ impl<
 
     async fn set_ram_y(&mut self) -> Result<(), DisplayError> {
         self.send_command(SET_RAM_Y, Some(&[0x00, 0x00, (Y - 1) as u8, 0x00]))
+            .await
+    }
+
+    async fn set_internal_temp_sensor(&mut self) -> Result<(), DisplayError> {
+        self.send_command(SET_TEMPERATURE_SENSOR, Some(&[0x80]))
             .await
     }
 }

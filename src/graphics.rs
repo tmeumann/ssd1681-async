@@ -15,7 +15,7 @@ impl<D: DisplayDriver, const N: usize> BufferedDisplay<D, N> {
         Self { driver, buffer }
     }
 
-    pub async fn flush(&mut self) -> Result<usize, D::Error> {
+    pub async fn flush(&mut self) -> Result<(), D::Error> {
         self.driver.draw_frame(&self.buffer).await
     }
 }

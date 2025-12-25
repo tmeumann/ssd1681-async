@@ -1,5 +1,6 @@
 pub const SET_DATA_ENTRY_MODE: u8 = 0x11;
 pub const RESET: u8 = 0x12;
+pub const SET_TEMPERATURE_SENSOR: u8 = 0x18;
 pub const SET_RAM_X: u8 = 0x44;
 pub const SET_RAM_Y: u8 = 0x45;
 pub const SET_X_POINTER: u8 = 0x4e;
