@@ -21,7 +21,12 @@ pub struct BufferedDisplay<D: DisplayDriver, const N: usize> {
 
 impl<D: DisplayDriver, const N: usize> BufferedDisplay<D, N> {
     pub fn new(driver: D, buffer: [u8; N], rotation: Rotation) -> Self {
-        const { assert!(N >= D::BUF_LEN) }
+        const {
+            assert!(
+                N == D::X * D::Y / 8,
+                "unexpected buffer size (expected `X * Y / 8` bytes)"
+            )
+        }
         Self {
             driver,
             buffer,
@@ -61,20 +66,22 @@ impl<D: DisplayDriver, const N: usize> DrawTarget for BufferedDisplay<D, N> {
 
             let [hw_x, hw_y] = match self.rotation {
                 Rotation::_0 => [x, y],
-                Rotation::_90 => [D::X - y - 1, x],
-                Rotation::_180 => [D::X - x - 1, D::Y - y - 1],
-                Rotation::_270 => [y, D::Y - x - 1],
+                Rotation::_90 => [D::X - 1 - y, x],
+                Rotation::_180 => [D::X - 1 - x, D::Y - 1 - y],
+                Rotation::_270 => [y, D::Y - 1 - x],
             };
 
             let byte_index = hw_y * bytes_per_scan + hw_x / 8;
             let bit_index = hw_x % 8;
 
-            match color {
-                BinaryColor::Off => {
-                    self.buffer[byte_index] &= !(0b1000_0000 >> bit_index);
-                }
-                BinaryColor::On => {
-                    self.buffer[byte_index] |= 0b1000_0000 >> bit_index;
+            if let Some(byte) = self.buffer.get_mut(byte_index) {
+                match color {
+                    BinaryColor::Off => {
+                        *byte &= !(0b1000_0000 >> bit_index);
+                    }
+                    BinaryColor::On => {
+                        *byte |= 0b1000_0000 >> bit_index;
+                    }
                 }
             }
         }

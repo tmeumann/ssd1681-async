@@ -3,6 +3,7 @@ use crate::commands::{
     SET_X_POINTER, SET_Y_POINTER, WRITE_RAM,
 };
 use crate::errors::DisplayError;
+use crate::utils::NeverPin;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::digital::Wait;
@@ -14,29 +15,37 @@ pub trait DisplayDriver {
     type Error;
     const X: usize;
     const Y: usize;
-    const BUF_LEN: usize = Self::X * Self::Y / 8;
 
     async fn enable_backlight(&mut self) -> Result<(), Self::Error>;
     async fn disable_backlight(&mut self) -> Result<(), Self::Error>;
     async fn draw_frame(&mut self, buffer: &[u8]) -> Result<(), Self::Error>;
 }
 
-pub struct Ssd1681Builder<const X: usize, const Y: usize, BL: OutputPin> {
+pub struct Ssd1681Builder<const X: usize, const Y: usize, BL: OutputPin = NeverPin> {
     backlight_pin: Option<BL>,
 }
 
-impl<const X: usize, const Y: usize, BL: OutputPin> Ssd1681Builder<X, Y, BL> {
+impl<const X: usize, const Y: usize> Default for Ssd1681Builder<X, Y> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const X: usize, const Y: usize> Ssd1681Builder<X, Y> {
     pub fn new() -> Self {
         Self {
             backlight_pin: None,
         }
     }
 
-    pub fn with_backlight(&mut self, backlight_pin: BL) -> &mut Self {
-        self.backlight_pin = Some(backlight_pin);
-        self
+    pub fn with_backlight<BL: OutputPin>(self, backlight_pin: BL) -> Ssd1681Builder<X, Y, BL> {
+        Ssd1681Builder {
+            backlight_pin: Some(backlight_pin),
+        }
     }
+}
 
+impl<const X: usize, const Y: usize, BL: OutputPin> Ssd1681Builder<X, Y, BL> {
     pub async fn connect<
         SPI: SpiDevice,
         BUSY: InputPin + Wait,
@@ -113,8 +122,7 @@ impl<
         self.send_command(SET_X_POINTER, Some(&[0x00])).await?;
         self.send_command(SET_Y_POINTER, Some(&[0x00, 0x00]))
             .await?;
-        self.send_command(WRITE_RAM, Some(&buffer[0..Self::BUF_LEN]))
-            .await?;
+        self.send_command(WRITE_RAM, Some(buffer)).await?;
         self.send_command(REFRESH_PANEL, None).await?;
 
         Ok(())
@@ -132,7 +140,7 @@ impl<
     DELAY: DelayNs,
 > Ssd1681<X, Y, SPI, BUSY, DC, BL, RST, DELAY>
 {
-    async fn new(
+    pub async fn new(
         spi: SPI,
         busy_pin: BUSY,
         dc_pin: DC,

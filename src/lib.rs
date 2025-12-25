@@ -5,16 +5,8 @@
 #![warn(clippy::panic)]
 #![warn(unsafe_code)]
 
-pub(crate) mod commands;
+mod commands;
 pub mod driver;
 pub mod errors;
 pub mod graphics;
-
-// #[cfg(test)]
-// mod tests {
-//     #[test]
-//     fn it_works() {
-//         let result = add(2, 2);
-//         assert_eq!(result, 4);
-//     }
-// }
+mod utils;
