@@ -106,14 +106,16 @@ impl<
 
     async fn enable_backlight(&mut self) -> Result<(), DisplayError> {
         if let Some(pin) = self.backlight_pin.as_mut() {
-            pin.set_high().map_err(|_| DisplayError::Backlight)?;
+            pin.set_high()
+                .map_err(|_| DisplayError::BacklightPinFailure)?;
         }
         Ok(())
     }
 
     async fn disable_backlight(&mut self) -> Result<(), DisplayError> {
         if let Some(pin) = self.backlight_pin.as_mut() {
-            pin.set_low().map_err(|_| DisplayError::Backlight)?;
+            pin.set_low()
+                .map_err(|_| DisplayError::BacklightPinFailure)?;
         }
         Ok(())
     }
@@ -124,9 +126,7 @@ impl<
             .await?;
         self.send_command(WRITE_RAM, Some(buffer)).await?;
         self.set_update_sequence().await?;
-        self.send_command(REFRESH_PANEL, None).await?;
-
-        Ok(())
+        self.send_command(REFRESH_PANEL, None).await
     }
 }
 
@@ -165,7 +165,7 @@ impl<
 
     async fn init(&mut self) -> Result<(), DisplayError> {
         self.delay.delay_ms(10).await; // ensure 10ms has passed since powerup
-        self.reset().await?;
+        self.full_reset().await?;
         self.set_data_entry_mode().await?;
         self.set_ram_x().await?;
         self.set_ram_y().await?;
@@ -173,24 +173,29 @@ impl<
         Ok(())
     }
 
-    async fn wait_if_busy(&mut self) -> Result<(), DisplayError> {
+    async fn wait_while_busy(&mut self) -> Result<(), DisplayError> {
+        self.delay.delay_ms(20).await;
         self.busy_pin
             .wait_for_low()
             .await
-            .map_err(|_| DisplayError::Busy)
+            .map_err(|_| DisplayError::BusyPinFailure)
     }
 
     async fn send_spi(&mut self, data: &[u8]) -> Result<(), DisplayError> {
-        self.spi.write(data).await.map_err(|_| DisplayError::Spi)
+        self.spi
+            .write(data)
+            .await
+            .map_err(|_| DisplayError::SpiFailure)
     }
 
     async fn send_command(&mut self, command: u8, data: Option<&[u8]>) -> Result<(), DisplayError> {
-        self.delay.delay_ms(10).await;
-        self.wait_if_busy().await?;
+        if self.busy()? {
+            return Err(DisplayError::DeviceBusy);
+        }
 
         self.dc_pin
             .set_low()
-            .map_err(|_| DisplayError::DataCommand)?;
+            .map_err(|_| DisplayError::DataCommandPinFailure)?;
         self.delay.delay_us(10).await;
 
         self.send_spi(&[command]).await?;
@@ -198,23 +203,18 @@ impl<
         if let Some(buf) = data {
             self.dc_pin
                 .set_high()
-                .map_err(|_| DisplayError::DataCommand)?;
+                .map_err(|_| DisplayError::DataCommandPinFailure)?;
             self.delay.delay_us(10).await;
             self.send_spi(buf).await?;
         }
-        self.delay.delay_ms(10).await;
+        self.wait_while_busy().await?;
 
         Ok(())
     }
 
-    async fn reset(&mut self) -> Result<(), DisplayError> {
-        self.reset_pin.set_low().map_err(|_| DisplayError::Reset)?;
-        self.delay.delay_ms(10).await;
-        self.reset_pin.set_high().map_err(|_| DisplayError::Reset)?;
-        self.delay.delay_ms(10).await;
-        self.send_command(RESET, None).await?;
-        self.delay.delay_ms(10).await;
-        Ok(())
+    async fn full_reset(&mut self) -> Result<(), DisplayError> {
+        self.hw_reset().await?;
+        self.sw_reset().await
     }
 
     async fn set_data_entry_mode(&mut self) -> Result<(), DisplayError> {
@@ -238,5 +238,31 @@ impl<
 
     async fn set_update_sequence(&mut self) -> Result<(), DisplayError> {
         self.send_command(SET_UPDATE_SEQUENCE, Some(&[0xF7])).await
+    }
+
+    fn busy(&mut self) -> Result<bool, DisplayError> {
+        self.busy_pin
+            .is_high()
+            .map_err(|_| DisplayError::BusyPinFailure)
+    }
+
+    async fn hw_reset(&mut self) -> Result<(), DisplayError> {
+        self.reset_pin
+            .set_low()
+            .map_err(|_| DisplayError::ResetPinFailure)?;
+
+        self.delay.delay_ms(10).await;
+
+        self.reset_pin
+            .set_high()
+            .map_err(|_| DisplayError::ResetPinFailure)?;
+
+        self.delay.delay_ms(10).await;
+
+        Ok(())
+    }
+
+    async fn sw_reset(&mut self) -> Result<(), DisplayError> {
+        self.send_command(RESET, None).await
     }
 }
