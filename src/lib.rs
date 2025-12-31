@@ -6,7 +6,7 @@
 #![warn(unsafe_code)]
 
 mod commands;
+pub mod config;
 pub mod driver;
 pub mod errors;
 pub mod graphics;
-mod utils;
