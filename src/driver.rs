@@ -7,7 +7,7 @@ use crate::errors::DisplayError;
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::delay::DelayNs;
 use embedded_hal_async::digital::Wait;
-use embedded_hal_async::spi::SpiDevice;
+use embedded_hal_async::spi::SpiBus;
 
 pub trait DisplayDriver {
     type Error;
@@ -20,9 +20,10 @@ pub trait DisplayDriver {
     async fn disable_backlight(&mut self) -> Result<(), Self::Error>;
 }
 
-pub struct Ssd1681<const X: usize, const Y: usize, SPI, BUSY, DC, BL, RST, DELAY>
+pub struct Ssd1681<const X: usize, const Y: usize, SPI, CS, BUSY, DC, BL, RST, DELAY>
 where
-    SPI: SpiDevice,
+    SPI: SpiBus,
+    CS: OutputPin,
     BUSY: InputPin + Wait,
     DC: OutputPin,
     BL: OutputPin,
@@ -30,6 +31,7 @@ where
     DELAY: DelayNs,
 {
     spi: SPI,
+    cs_pin: CS,
     busy_pin: BUSY,
     dc_pin: DC,
     backlight_pin: Option<BL>,
@@ -41,16 +43,18 @@ where
 impl<
     const X: usize,
     const Y: usize,
-    SPI: SpiDevice,
+    SPI: SpiBus,
+    CS: OutputPin,
     BUSY: InputPin + Wait,
     DC: OutputPin,
     BL: OutputPin,
     RST: OutputPin,
     DELAY: DelayNs,
-> Ssd1681<X, Y, SPI, BUSY, DC, BL, RST, DELAY>
+> Ssd1681<X, Y, SPI, CS, BUSY, DC, BL, RST, DELAY>
 {
     pub async fn new(
         spi: SPI,
+        cs_pin: CS,
         busy_pin: BUSY,
         dc_pin: DC,
         reset_pin: RST,
@@ -60,6 +64,7 @@ impl<
     ) -> Result<Self, DisplayError> {
         let mut new = Self {
             spi,
+            cs_pin,
             busy_pin,
             dc_pin,
             backlight_pin,
@@ -74,6 +79,9 @@ impl<
     }
 
     async fn init(&mut self) -> Result<(), DisplayError> {
+        self.cs_pin
+            .set_high()
+            .map_err(|_| DisplayError::SpiFailure)?;
         self.delay.delay_ms(10).await; // ensure 10ms has passed since powerup
         self.reset().await?;
         self.set_data_entry_mode().await?;
@@ -95,7 +103,8 @@ impl<
         self.spi
             .write(data)
             .await
-            .map_err(|_| DisplayError::SpiFailure)
+            .map_err(|_| DisplayError::SpiFailure)?;
+        self.spi.flush().await.map_err(|_| DisplayError::SpiFailure)
     }
 
     async fn send_command(&mut self, command: u8, data: Option<&[u8]>) -> Result<(), DisplayError> {
@@ -106,7 +115,10 @@ impl<
         self.dc_pin
             .set_low()
             .map_err(|_| DisplayError::DataCommandPinFailure)?;
-        self.delay.delay_us(self.config.dc_settle_us).await;
+        // self.delay.delay_us(self.config.dc_settle_us).await;
+        self.cs_pin
+            .set_low()
+            .map_err(|_| DisplayError::SpiFailure)?;
 
         self.send_spi(&[command]).await?;
 
@@ -114,9 +126,12 @@ impl<
             self.dc_pin
                 .set_high()
                 .map_err(|_| DisplayError::DataCommandPinFailure)?;
-            self.delay.delay_us(self.config.dc_settle_us).await;
+            // self.delay.delay_us(self.config.dc_settle_us).await;
             self.send_spi(buf).await?;
         }
+        self.cs_pin
+            .set_high()
+            .map_err(|_| DisplayError::SpiFailure)?;
         self.wait_while_busy().await?;
 
         Ok(())
@@ -165,6 +180,7 @@ impl<
         self.delay.delay_ms(10).await;
 
         self.send_command(RESET, None).await?;
+        self.delay.delay_ms(10).await;
 
         Ok(())
     }
@@ -173,13 +189,14 @@ impl<
 impl<
     const X: usize,
     const Y: usize,
-    SPI: SpiDevice,
+    SPI: SpiBus,
+    CS: OutputPin,
     BUSY: InputPin + Wait,
     DC: OutputPin,
     BL: OutputPin,
     RST: OutputPin,
     DELAY: DelayNs,
-> DisplayDriver for Ssd1681<X, Y, SPI, BUSY, DC, BL, RST, DELAY>
+> DisplayDriver for Ssd1681<X, Y, SPI, CS, BUSY, DC, BL, RST, DELAY>
 {
     type Error = DisplayError;
 
